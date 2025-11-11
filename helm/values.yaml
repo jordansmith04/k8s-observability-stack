@@ -1,0 +1,40 @@
+microservice:
+  name: nginx-web
+  image:
+    repository: nginx
+    tag: 1.25.3
+    pullPolicy: IfNotPresent
+  
+  replicaCount: 2
+
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 80
+  
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+
+# Stack Config
+# Set these to 'true' or 'false' to control installation of the dependency charts
+prometheus:
+  enabled: true
+  kube-prometheus-stack:
+    grafana:
+      defaultDashboardsTimezone: UTC
+      persistence:
+        enabled: true
+        size: 5Gi
+
+loki:
+  enabled: true
+  loki-stack:
+    loki:
+      persistence:
+        enabled: true
+        size: 10Gi

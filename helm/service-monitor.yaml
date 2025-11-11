@@ -1,0 +1,21 @@
+{{- if .Values.prometheus.enabled }}
+apiVersion: [monitoring.coreos.com/v1](https://monitoring.coreos.com/v1)
+kind: ServiceMonitor
+metadata:
+  name: {{ include "k8s-observability-stack.fullname" . }}-monitor
+  labels:
+    {{- include "k8s-observability-stack.labels" . | nindent 4 }}
+    release: prometheus-stack
+spec:
+  selector:
+    matchLabels:
+      {{- include "k8s-observability-stack.selectorLabels" . | nindent 8 }}
+  endpoints:
+    # Scrape target for Prometheus
+    - port: http
+      path: /metrics
+      interval: 30s
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}

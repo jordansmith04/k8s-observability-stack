@@ -1,0 +1,33 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "k8s-observability-stack.fullname" . }}
+  labels:
+    {{- include "k8s-observability-stack.labels" . | nindent 4 }}
+    app.kubernetes.io/component: microservice
+spec:
+  replicas: {{ .Values.microservice.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "k8s-observability-stack.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "k8s-observability-stack.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: microservice
+    spec:
+      containers:
+        - name: {{ .Values.microservice.name }}
+          image: "{{ .Values.microservice.image.repository }}:{{ .Values.microservice.image.tag }}"
+          imagePullPolicy: {{ .Values.microservice.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: {{ .Values.microservice.service.targetPort }}
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.microservice.resources | nindent 12 }}
+          
+          # Add standard Prometheus annotations for metrics exposure
+          annotations:
+            prometheus.io/scrape: 'true'
+            prometheus.io/port: '80'

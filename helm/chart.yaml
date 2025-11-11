@@ -1,0 +1,19 @@
+apiVersion: v2
+name: k8s-observability-stack
+description: A Helm chart for deploying a microservice with integrated Prometheus, Grafana, and Loki observability stack.
+
+type: application
+version: 0.1.0
+
+dependencies:
+  # Prometheus/Grafana stack
+  - name: kube-prometheus-stack
+    version: "58.1.0"
+    repository: "[https://prometheus-community.github.io/helm-charts](https://prometheus-community.github.io/helm-charts)"
+    condition: prometheus.enabled # Only install if prometheus is enabled in values.yaml
+    
+  # Loki for centralized logging
+  - name: loki-stack
+    version: "2.10.0"
+    repository: "[https://grafana.github.io/helm-charts](https://grafana.github.io/helm-charts)"
+    condition: loki.enabled # Only install if loki is enabled in values.yaml

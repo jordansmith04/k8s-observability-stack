@@ -1,0 +1,93 @@
+# Gitlab CI/CD pipeline for provisioning EKS and deploying the Observability Stack
+
+default:
+  before_script:
+    - apk update && apk add gettext bash curl unzip jq python3 py3-pip # Install utilities
+    - pip install awscli # Install AWS CLI for EKS and Kubernetes authentication
+
+variables:
+  # Terraform State Management
+  TF_ROOT: ${CI_PROJECT_DIR}
+  TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${CI_PROJECT_NAME}
+
+  # AWS/EKS Variables in Gitlab CI/CD Variables
+  AWS_REGION: us-east-1
+  EKS_CLUSTER_NAME: obs-demo-cluster
+  HELM_RELEASE_NAME: k8s-observability-demo
+  K8S_NAMESPACE: k8s-obs-stack
+
+stages:
+  - validate
+  - provision
+  - deploy
+
+# Terraform validate
+terraform_validate:
+  stage: validate
+  image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+  script:
+    - terraform init
+    - terraform validate
+  allow_failure: false # Validation must pass to proceed
+
+# Terraform apply
+terraform_provision:
+  stage: provision
+  image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+  script:
+    - terraform init -backend-config="address=${TF_ADDRESS}"
+    - terraform plan -out="plan.tfplan"
+    - terraform apply -auto-approve "plan.tfplan"
+    
+    # Generate kubeconfig for EKS cluster
+    - echo "Generating kubeconfig file..."
+    - |
+      aws eks update-kubeconfig \
+        --name ${EKS_CLUSTER_NAME} \
+        --region ${AWS_REGION} \
+        --kubeconfig kubeconfig.yml
+      
+    - echo "Kubeconfig generated successfully."
+
+  artifacts:
+    expire_in: 1 hour
+    paths:
+      - kubeconfig.yml
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
+
+# Deploy
+helm_deploy:
+  stage: deploy
+  image: alpine/helm:3.14.0
+  needs:
+    - job: terraform_provision
+      artifacts: true
+
+  script:
+    - export KUBECONFIG=${CI_PROJECT_DIR}/kubeconfig.yml
+    - echo "KUBECONFIG set. Current Kubernetes context:"
+    - kubectl config current-context
+    
+    # Ensure the target namespace exists
+    - kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
+    
+    # Add Helm Repositories
+    - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+    - helm repo add grafana https://grafana.github.io/helm-charts
+    - helm repo update
+
+    # Download Dependencies (Loki and Prometheus Stack)
+    - helm dependency update ./k8s-observability-stack
+
+    # Deploy/Upgrade the Observability Stack
+    - |
+      helm upgrade --install ${HELM_RELEASE_NAME} ./k8s-observability-stack \
+        --namespace ${K8S_NAMESPACE} \
+        --create-namespace \
+        --atomic # If install/upgrade fails, rollback to previous version
+      
+    - echo "Helm deployment of ${HELM_RELEASE_NAME} complete."
+
+  rules:
+    - if: $CI_COMMIT_BRANCH == "main"
