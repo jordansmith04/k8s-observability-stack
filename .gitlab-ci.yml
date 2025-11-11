@@ -2,18 +2,18 @@
 
 default:
   before_script:
-    - apk update && apk add gettext bash curl unzip jq python3 py3-pip # Install utilities
-    - pip install awscli # Install AWS CLI for EKS and Kubernetes authentication
+    # Install utilities, AWS CLI, and Helm
+    - apk update && apk add gettext bash curl unzip jq python3 py3-pip
+    - pip install awscli
+    # Ensure AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY are set as CI/CD variables.
 
 variables:
   # Terraform State Management
-  TF_ROOT: ${CI_PROJECT_DIR}
   TF_ADDRESS: ${CI_API_V4_URL}/projects/${CI_PROJECT_ID}/terraform/state/${CI_PROJECT_NAME}
 
-  # AWS/EKS Variables in Gitlab CI/CD Variables
+  # AWS/EKS Variables
   AWS_REGION: us-east-1
   EKS_CLUSTER_NAME: obs-demo-cluster
-  HELM_RELEASE_NAME: k8s-observability-demo
   K8S_NAMESPACE: k8s-obs-stack
 
 stages:
@@ -26,6 +26,8 @@ terraform_validate:
   stage: validate
   image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
   script:
+    - echo "Running Terraform validation in the 'terraform/' directory..."
+    - cd terraform # Change directory to where main.tf resides
     - terraform init
     - terraform validate
   allow_failure: false # Validation must pass to proceed
@@ -35,10 +37,15 @@ terraform_provision:
   stage: provision
   image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
   script:
+    - echo "Running Terraform provisioning in the 'terraform/' directory..."
+    - cd terraform # Change directory to where main.tf resides
     - terraform init -backend-config="address=${TF_ADDRESS}"
     - terraform plan -out="plan.tfplan"
     - terraform apply -auto-approve "plan.tfplan"
-    
+
+    # Move back to root to ensure kubeconfig is saved in CI_PROJECT_DIR
+    - cd ${CI_PROJECT_DIR}
+
     # Generate kubeconfig for EKS cluster
     - echo "Generating kubeconfig file..."
     - |
@@ -46,7 +53,7 @@ terraform_provision:
         --name ${EKS_CLUSTER_NAME} \
         --region ${AWS_REGION} \
         --kubeconfig kubeconfig.yml
-      
+
     - echo "Kubeconfig generated successfully."
 
   artifacts:
@@ -56,10 +63,10 @@ terraform_provision:
   rules:
     - if: $CI_COMMIT_BRANCH == "main"
 
-# Deploy
+# Deploy Observability Stack and Microservice
 helm_deploy:
   stage: deploy
-  image: alpine/helm:3.14.0
+  image: alpine/helm:3.14.0 # Includes kubectl and Helm
   needs:
     - job: terraform_provision
       artifacts: true
@@ -68,26 +75,48 @@ helm_deploy:
     - export KUBECONFIG=${CI_PROJECT_DIR}/kubeconfig.yml
     - echo "KUBECONFIG set. Current Kubernetes context:"
     - kubectl config current-context
-    
-    # Ensure the target namespace exists
+
+    # Prepare Environment
+    - echo "Creating Namespace: ${K8S_NAMESPACE}"
     - kubectl create namespace ${K8S_NAMESPACE} --dry-run=client -o yaml | kubectl apply -f -
-    
+
     # Add Helm Repositories
+    - echo "Adding Helm repositories..."
     - helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
     - helm repo add grafana https://grafana.github.io/helm-charts
     - helm repo update
 
-    # Download Dependencies (Loki and Prometheus Stack)
-    - helm dependency update ./k8s-observability-stack
-
-    # Deploy/Upgrade the Observability Stack
-    - |
-      helm upgrade --install ${HELM_RELEASE_NAME} ./k8s-observability-stack \
+    # Deploy Loki
+    - echo "Deploying Loki with custom values from loki/..."
+    - helm upgrade --install loki grafana/loki \
         --namespace ${K8S_NAMESPACE} \
-        --create-namespace \
-        --atomic # If install/upgrade fails, rollback to previous version
-      
-    - echo "Helm deployment of ${HELM_RELEASE_NAME} complete."
+        -f loki/values.yaml \
+        --atomic
+
+    #Deploy Prometheus Stack
+    - echo "Deploying Prometheus Stack with custom values from prometheus/..."
+    - helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+        --namespace ${K8S_NAMESPACE} \
+        -f prometheus/prometheus-values.yaml \
+        --atomic
+
+    # Apply Promtail DaemonSet and ConfigMap
+    - echo "Applying custom Promtail manifests from loki/..."
+    # Note: These are applied directly with kubectl since they are custom manifests
+    - kubectl apply -n ${K8S_NAMESPACE} -f loki/promtail-configmap.yaml
+    - kubectl apply -n ${K8S_NAMESPACE} -f loki/promtail-daemonset.yaml
+
+    # Apply Custom Grafana Dashboard ConfigMap
+    - echo "Applying custom Grafana dashboard configmap from grafana/..."
+    - kubectl apply -n ${K8S_NAMESPACE} -f grafana/grafana-dashboard-configmap.yaml
+
+    # Deploy Nginx Microservice
+    - echo "Deploying Nginx Microservice (using local chart ./nginx)..."
+    - helm upgrade --install nginx-microservice ./nginx \
+        --namespace default \
+        --atomic
+
+    - echo "All services deployed successfully."
 
   rules:
     - if: $CI_COMMIT_BRANCH == "main"

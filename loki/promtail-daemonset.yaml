@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: promtail
+  namespace: k8s-obs-stack
+  labels:
+    app: promtail
+spec:
+  selector:
+    matchLabels:
+      app: promtail
+  template:
+    metadata:
+      labels:
+        app: promtail
+    spec:
+      # Needed to access host logs and Docker socket/symlinks
+      hostPID: true
+      hostNetwork: true
+
+      containers:
+      - name: promtail
+        image: grafana/promtail:2.9.0
+        imagePullPolicy: IfNotPresent
+        args:
+          - -config.file=/etc/promtail/config.yaml
+        ports:
+          - name: http-metrics
+            containerPort: 9080
+        securityContext:
+          readOnlyRootFilesystem: true
+          # Promtail needs host access to read logs
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+              - ALL
+
+        volumeMounts:
+        - name: config
+          mountPath: /etc/promtail/config.yaml
+          subPath: config.yaml
+        - name: run
+          mountPath: /run/promtail
+        - name: logs
+          mountPath: /var/log
+          readOnly: true
+        - name: containers
+          mountPath: /var/lib/docker/containers
+          readOnly: true
+
+      volumes:
+      - name: config
+        configMap:
+          name: promtail-config
+      - name: run
+        hostPath:
+          path: /run/promtail
+      - name: logs
+        hostPath:
+          path: /var/log
+      - name: containers
+        hostPath:
+          path: /var/lib/docker/containers

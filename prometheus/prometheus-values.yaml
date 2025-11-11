@@ -1,0 +1,57 @@
+namespace: k8s-obs-stack
+
+# Prometheus Server Configuration
+prometheus:
+  prometheusSpec:
+    # Enable persistence for the Time Series Database (TSDB)
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          # Define a size for the Prometheus data
+          resources:
+            requests:
+              storage: 50Gi
+          # Use the cluster's default storage class, or specify a name here
+          storageClassName: "standard" 
+          accessModes: ["ReadWriteOnce"]
+    
+    # Scrape configuration for the Loki service itself (to monitor its health)
+    additionalScrapeConfigs:
+    - job_name: 'loki-targets'
+      static_configs:
+      - targets: ['loki:3100'] # Points to your Loki service in the k8s-obs-stack namespace
+      # Loki metrics endpoint is /metrics, which is the Prometheus default
+
+# Grafana Configuration
+grafana:
+  enabled: true
+  adminPassword: "promgrafanaadmin"
+  
+  # Inject the Loki data source automatically into Grafana
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      access: proxy
+      url: http://loki.k8s-obs-stack.svc.cluster.local:3100
+      isDefault: false
+      version: 1
+      editable: true
+      
+  service:
+    type: ClusterIP
+
+# Node Exporter Configuration
+nodeExporter:
+  enabled: true
+  
+# Alertmanager Configuration
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          resources:
+            requests:
+              storage: 1Gi
+          accessModes: ["ReadWriteOnce"]

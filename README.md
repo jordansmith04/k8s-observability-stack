@@ -1,100 +1,131 @@
-# k8s-observability-stack
-Kubernetes Monitoring Stack Deployment to EKS using Helm, Prometheus, Grafana, Loki and Gitlab CI/CD
+# Kubernetes Observability Stack and EKS Provisioning
 
-This repository contains the full infrastructure-as-code (IaC) and deployment pipeline for provisioning an an Amazon EKS cluster and deploying a cloud-native observability stack (Prometheus, Grafana, and Loki) using Helm.
+This project provides a comprehensive solution for provisioning an Amazon EKS cluster using Terraform and deploying a full Kubernetes Observability Stack (Loki, Prometheus, Grafana) using Helm charts and custom manifests. It also includes a sample Nginx microservice to generate metrics and logs for observation.
 
-The entire process is automated through a GitLab CI/CD pipeline utilizing Terraform for infrastructure and Helm for application deployment.
+The pipeline is designed to be executed via GitLab CI/CD, but a dedicated script is provided for local development using Minikube.
 
-## Infrastructure Overview
+## Project Overview & Architecture
 
-The pipeline executes Terraform code located in the terraform/ directory to provision the core infrastructure:
+The goal of this repository is to establish a complete monitoring and logging system for a Kubernetes workload.
 
-- Amazon EKS Cluster: Creates a fully managed Kubernetes cluster (${EKS_CLUSTER_NAME}).
+### The Stack Includes:
 
-- VPC and Networking: Provisions the necessary Virtual Private Cloud (VPC), subnets, and security groups to support the EKS cluster and allow external access.
+| Component | Tool / Technology | Purpose | 
+| -------- | ----------- | --------- |
+| Infrastructure | Terraform| Provisioning of the AWS EKS Cluster and related networking. |
+| Metrics| Prometheus (via kube-prometheus-stack)| Collects and stores time-series metric data. |
+| Logging| Loki| Centralized log aggregation system. |
+| Log Collector| Promtail| DaemonSet that ships logs from all nodes to Loki. |
+| Visualization| Grafana| Dashboarding and visualization for both Prometheus (metrics) and Loki (logs). |
+| Application| Nginx Microservice| A simple application deployed to generate metrics and logs for testing. |
 
-- Worker Nodes: Sets up an Auto Scaling Group (ASG) of EC2 instances to act as the Kubernetes worker nodes.
+### Repository Structure
 
-- Once provisioned, the pipeline automatically generates a temporary Kubernetes configuration file (kubeconfig.yml) and uses it to deploy the application stack.
+| Directory/File | Description |
+| -------- | ----------- |
+| terraform/ | Contains all Terraform configuration (.tf files) required to provision the EKS cluster and IAM roles. | 
+| loki/ | Custom Helm values.yaml for Loki, plus the YAML manifests for the Promtail DaemonSet and ConfigMap. | 
+| prometheus/ | Custom Helm prometheus-values.yaml for the kube-prometheus-stack chart. | 
+| grafana/ | Custom Grafana Dashboard ConfigMap used to load an initial dashboard configuration into the deployed Grafana instance. |
+| nginx/ | A standalone Helm Chart for the sample Nginx microservice.
+| .gitlab-ci.yml | The complete CI/CD pipeline definition for automated provisioning and deployment to AWS EKS. | 
+local_stack_development.sh | A utility script for setting up the entire stack locally using Minikube. |
 
-## Prerequisites and Setup
+## Prerequisites
 
-Before running the pipeline, you must ensure the following are configured in your GitLab project.
+For CI/CD Deployment (GitLab & EKS)
 
-### 1. AWS Credentials (Required)
+- GitLab Repository: This project must be hosted on GitLab.
 
-The pipeline requires access to your AWS account to provision resources. These credentials must be set as Secret Environment Variables in your GitLab project settings (Settings > CI/CD > Variables).
+AWS Credentials:
 
-| Variable Key | Value Description | Type |
-| ------- | -------- | -------|
-| AWS_ACCESS_KEY_ID | Your AWS user access key ID | File or Variable |
-| AWS_SECRET_ACCESS_KEY | Your AWS user secret access key | File or Variable | 
+Set the following as Protected CI/CD Variables in your GitLab project:
 
-### 2. Custom Environment Variables (Optional)
+- AWS_ACCESS_KEY_ID
 
-The pipeline uses the following variables, defined in the .gitlab-ci.yml, for configuration. You can override these by setting them as variables in your GitLab project if you need different values.
+- AWS_SECRET_ACCESS_KEY
 
-| Variable Key | Default Value | Description |
-| ------- | -------- | -------|
-| AWS_REGION | us-east-1 | The AWS region where the EKS cluster will be deployed |
-| EKS_CLUSTER_NAME | obs-demo-cluster | The name given to the EKS cluster | 
-| TF_ROOT | terraform | Directory containing the Terraform code |
-| HELM_CHART_PATH | helm | Path to the Helm chart within the repository | 
-| K8S_NAMESPACE | k8s-obs-stack | Kubernetes namespace for the application deployment |
+CI/CD Variables (Optional but Recommended):
 
-## Usage and Pipeline Stages
+- AWS_REGION: e.g., us-east-1 (Default)
 
-The pipeline is configured to automatically run on pushes to the repository, but the provision and deploy stages are restricted to the main branch for safety.
+- EKS_CLUSTER_NAME: e.g., obs-demo-cluster (Default)
 
-### 1. Validate Stage
+For Local Development (Minikube)
 
-- Purpose: Ensure the Terraform code is valid and generate an execution plan.
+- Docker: Required for the Minikube driver.
 
-- Runs terraform init and terraform validate.
+- Minikube: Latest version installed and configured.
 
-- Generates plan.tfplan artifact, which describes what changes will be made.
+- Helm: Latest version installed.
 
-### 2. Provision Stage
+- Kubectl: Latest version installed.
 
-- Purpose: Create or update the EKS infrastructure on AWS.
+- Bash: The local deployment script requires a standard Unix environment.
 
-- Runs terraform apply using the plan created in the validate stage.
+## Deployment Guide: CI/CD (EKS)
 
-- After successful creation, it executes the AWS CLI command to generate and save the kubeconfig.yml file, which is crucial for the next stage.
+The .gitlab-ci.yml pipeline automates the entire process and runs only on the main branch.
 
-- Runs on: main branch only.
+### 1. Provisioning (terraform_provision)
 
-### 3. Deploy Stage
+This job uses Terraform to create the EKS cluster.
 
-- Purpose: Deploy the Observability Stack application onto the new EKS cluster.
+Action:
 
-- Uses the artifacted kubeconfig.yml to authenticate with the EKS cluster.
+1. Initializes and validates Terraform configuration (in the terraform/ directory).
 
-- Ensures the target Kubernetes namespace (k8s-obs-stack) exists.
+2. Applies the plan, provisioning the EKS cluster and worker nodes.
 
-- Executes helm upgrade --install to deploy the Helm chart found at helm/.
+3. Generates a kubeconfig.yml file using the AWS CLI for the cluster, which is stored as a job artifact.
 
-- Runs on: main branch only, after provision is successful.
+### 2. Deployment (helm_deploy)
 
-### Running the Pipeline
+This job uses the generated kubeconfig.yml to connect to the new EKS cluster and deploy the stack.
 
-1. Configure Secrets: Set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY in GitLab CI/CD variables.
+Action:
 
-2. Commit: Ensure your Terraform (terraform/) and Helm Chart (helm/) directories contain valid code.
+1. Sets the KUBECONFIG environment variable.
 
-3. Push: Push your changes to the main branch.
+2. Creates the target namespace (k8s-obs-stack).
 
-4. The pipeline will automatically execute, first creating the cluster, and then deploying the application, resulting in a fully provisioned and deployed environment.
+3. Installs Loki using its custom values.yaml.
 
-### Cleanup and Destruction
+4. Installs the Prometheus Stack (including built-in Grafana) using its custom prometheus-values.yaml.
 
-- To remove the EKS cluster and all related AWS resources created by Terraform, you can manually run a destroy job.
+5. Applies custom manifests for Promtail and the Grafana Dashboard ConfigMap.
 
-- Temporarily add a new job to your .gitlab-ci.yml (or create a custom pipeline run) that executes the following script:
+6. Installs the Nginx Microservice chart into the default namespace.
+
+## Local Development Guide (Minikube)
+
+Use the provided local_stack_development.sh script to quickly launch and test the stack on your local machine.
+
+### 1. Start Minikube
+
+Ensure Minikube is running with adequate resources:
 ```
-cd terraform
-terraform init -backend-config="address=$TF_ADDRESS"
-terraform destroy -auto-approve
+./local_stack_development.sh install
 ```
 
-Alternatively: Go into your terraform directory locally, run terraform init, and then terraform destroy. Ensure you use the same state backend configuration to target the remote state stored in GitLab.
+The script will automatically check for Minikube and start it if necessary, requesting 8GB of memory and 4 CPUs.
+
+### 2. Install/Upgrade the Stack
+
+The script uses individual Helm commands and kubectl apply to mirror the CI/CD environment.
+
+| Action | Command | Description | 
+| -------- | ----------- | ---------- |
+| Install | ./local_stack_development.sh install | Sets up Minikube and performs a clean installation of all components. | 
+| Upgrade | ./local_stack_development.sh upgrade| Upgrades existing Helm releases, reusing current values. |
+| Delete| ./local_stack_development.sh delete| Uninstalls all Helm charts and deletes all custom resources. | 
+
+### 3. Access the UIs
+
+Once the deployment is complete, the script will provide the exact commands, but typically you can access the components via minikube service:
+
+| Component| Access Command | Default Credentials |
+| -------- | ----------- | ---------- |
+| Grafana| minikube service prometheus-grafana -n k8s-obs-stack| admin / prom-operator | 
+| Prometheus| minikube service prometheus-kube-p-prometheus -n k8s-obs-stack| N/A | 
+| Nginx App| minikube service nginx-microservice -n default| N/A |

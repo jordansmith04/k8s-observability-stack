@@ -1,0 +1,21 @@
+microservice:
+  name: nginx-web
+  image:
+    repository: nginx
+    tag: 1.25.3
+    pullPolicy: IfNotPresent
+  
+  replicaCount: 2
+
+  service:
+    type: LoadBalancer
+    port: 80
+    targetPort: 80
+  
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi

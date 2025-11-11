@@ -1,27 +1,33 @@
 #!/bin/bash
 
-# Kubernetes Observability Stack Deployment Script
+# Kubernetes Observability Stack Deployment Script to Minikube
 
-# This script sets up a local Minikube environment
-# and deploys the k8s-observability-stack Helm chart, including Prometheus, 
-# Grafana, Loki, and the sample microservice.
+# This script sets up a local Minikube environment and deploys all
+# components of the k8s observability stack (Loki, Prometheus, Grafana,
+# Promtail, and the Nginx microservice) using individual configurations.
 #
-# Usage: ./deploy.sh [install|upgrade|delete]
-# Example: ./deploy.sh install
-
+# Usage: ./local_stack_development.sh [install|upgrade|delete]
+# Example: ./local_stack_development.sh install
 
 set -e
-HELM_RELEASE_NAME="k8s-observability-demo"
+
+#  Configuration Variables 
 NAMESPACE="k8s-obs-stack"
-CHART_PATH="./helm"
+
+# Release names for individual Helm charts
+LOKI_RELEASE_NAME="loki"
+PROMETHEUS_RELEASE_NAME="prometheus"
+NGINX_RELEASE_NAME="nginx-microservice"
 
 ACTION=${1:-install} # Default action is install, Actions: [install|upgrade|delete]
-ENV="minikube"        
+ENV="minikube"
 
-echo " Kubernetes Observability Stack Deployment "
-echo "Action: $ACTION | Environment: $ENV | Release: $HELM_RELEASE_NAME | Namespace: $NAMESPACE"
+echo "================================================"
+echo " Kubernetes Observability Stack Deployment (Local) "
+echo "Action: $ACTION | Environment: $ENV | Namespace: $NAMESPACE"
+echo "================================================"
 
-# Helper Functions
+#  Helper Functions 
 setup_minikube() {
     echo "Checking Minikube status..."
     if ! command -v minikube &> /dev/null
@@ -32,11 +38,11 @@ setup_minikube() {
 
     if ! minikube status &> /dev/null || [ "$(minikube status -f '{{.Host}}')" != "Running" ]; then
         echo "Minikube not running. Starting cluster..."
+        # Ensure enough resources for the kube-prometheus-stack
         minikube start --driver=docker --memory=8192mb --cpus=4
     fi
 
-    echo "\Enabling required Minikube add-ons..."
-    # Metrics server must be installed for Prometheus to scrape node/pod metrics
+    echo "Enabling required Minikube add-ons..."
     minikube addons enable metrics-server || true
     echo "Minikube setup complete."
 }
@@ -49,19 +55,27 @@ wait_for_namespace() {
     echo "Namespace $NAMESPACE is ready."
 }
 
+#  Main Execution 
+
 # Environment Setup
-if [ "$ENV" == "minikube" ]; then
-    setup_minikube
-fi
+setup_minikube
 
 # Namespace Preparation
 wait_for_namespace
 
 # Handle Deletion
 if [ "$ACTION" == "delete" ]; then
-    echo "Deleting Helm release '$HELM_RELEASE_NAME'..."
-    helm uninstall "$HELM_RELEASE_NAME" -n "$NAMESPACE"
-    echo "Deletion complete. You may need to manually delete the namespace and persistent volumes."
+    echo "Deleting all deployed Helm releases and resources in namespace '$NAMESPACE'..."
+    helm uninstall "$LOKI_RELEASE_NAME" -n "$NAMESPACE" || true
+    helm uninstall "$PROMETHEUS_RELEASE_NAME" -n "$NAMESPACE" || true
+    helm uninstall "$NGINX_RELEASE_NAME" -n default || true # Nginx is in default namespace per CI
+
+    echo "Deleting custom Promtail and Grafana resources..."
+    kubectl delete -n "$NAMESPACE" -f loki/promtail-configmap.yaml || true
+    kubectl delete -n "$NAMESPACE" -f loki/promtail-daemonset.yaml || true
+    kubectl delete -n "$NAMESPACE" -f grafana/grafana-dashboard-configmap.yaml || true
+
+    echo "Deletion complete."
     exit 0
 fi
 
@@ -71,46 +85,74 @@ helm repo add prometheus-community https://prometheus-community.github.io/helm-c
 helm repo add grafana https://grafana.github.io/helm-charts
 helm repo update
 
-# Dependency Update
-echo "Fetching Helm chart dependencies..."
-helm dependency update "$CHART_PATH"
-
 # Install or Upgrade Deployment
-if [ "$ACTION" == "install" ]; then
-    echo "Installing Helm release '$HELM_RELEASE_NAME'..."
-    helm install "$HELM_RELEASE_NAME" "$CHART_PATH" --namespace "$NAMESPACE" --create-namespace
-elif [ "$ACTION" == "upgrade" ]; then
-    echo "Upgrading Helm release '$HELM_RELEASE_NAME'..."
-    helm upgrade "$HELM_RELEASE_NAME" "$CHART_PATH" --namespace "$NAMESPACE" --reuse-values
+HELM_CMD="install"
+if [ "$ACTION" == "upgrade" ]; then
+    HELM_CMD="upgrade --reuse-values"
+fi
+
+if [ "$ACTION" == "install" ] || [ "$ACTION" == "upgrade" ]; then
+    echo "Starting deployment sequence (Action: $ACTION)..."
+    
+    # Loki (Log Aggregation) 
+    echo "Deploying Loki ($LOKI_RELEASE_NAME)..."
+    helm $HELM_CMD "$LOKI_RELEASE_NAME" grafana/loki \
+        --namespace "$NAMESPACE" \
+        -f loki/values.yaml \
+        --wait
+
+    # Prometheus Stack (Metrics & Integrated Grafana) 
+    echo "Deploying Prometheus Stack ($PROMETHEUS_RELEASE_NAME)..."
+    helm $HELM_CMD "$PROMETHEUS_RELEASE_NAME" prometheus-community/kube-prometheus-stack \
+        --namespace "$NAMESPACE" \
+        -f prometheus/prometheus-values.yaml \
+        --wait
+
+    # Promtail (Log Collector) 
+    echo "Applying custom Promtail manifests..."
+    kubectl apply -n "$NAMESPACE" -f loki/promtail-configmap.yaml
+    kubectl apply -n "$NAMESPACE" -f loki/promtail-daemonset.yaml
+
+    # Grafana Dashboard ConfigMap 
+    echo "Applying custom Grafana dashboard configmap..."
+    kubectl apply -n "$NAMESPACE" -f grafana/grafana-dashboard-configmap.yaml
+
+    # Nginx Microservice (App to observe) 
+    echo "Deploying Nginx Microservice ($NGINX_RELEASE_NAME)..."
+    # Note: Deploying the microservice to the default namespace for isolation from the observability stack
+    helm $HELM_CMD "$NGINX_RELEASE_NAME" ./nginx \
+        --namespace default \
+        --wait
+    
 else
     echo "Invalid action specified. Use 'install', 'upgrade', or 'delete'."
     exit 1
 fi
 
-# Post-Deployment Verification and Access Instructions
+#  Post-Deployment Verification and Access Instructions 
+echo " "
 echo "--- Deployment Complete ---"
 
-echo "Waiting for all Pods to be ready in namespace $NAMESPACE (up to 120 seconds)..."
-kubectl wait --for=condition=ready pod -l app.kubernetes.io/instance="$HELM_RELEASE_NAME" -n "$NAMESPACE" --timeout=120s || true
+echo "Waiting for all major Pods to be ready..."
+# Use a broad label selector for better coverage
+kubectl wait --for=condition=ready pod -l app.kubernetes.io/name -n "$NAMESPACE" --timeout=120s || true
 echo "Basic Pod readiness check passed."
 
 echo " "
-echo "Your Kubernetes observability stack and microservice are deployed."
+echo "Your Kubernetes observability stack and microservice are deployed locally."
 echo " "
 echo "--- ACCESS INSTRUCTIONS ---"
-echo "Minikube detected. Use 'minikube service' to access services:"
+echo "Minikube detected. Use 'minikube service' to access the UIs:"
 echo " "
 echo "   * Grafana Dashboard (Visualization):"
-echo "     minikube service ${HELM_RELEASE_NAME}-kube-prometheus-stack-grafana -n ${NAMESPACE}"
+echo "     minikube service ${PROMETHEUS_RELEASE_NAME}-grafana -n ${NAMESPACE}"
 echo " "
 echo "   * Prometheus UI (Metrics):"
-echo "     minikube service ${HELM_RELEASE_NAME}-kube-prometheus-stack-prometheus -n ${NAMESPACE}"
+echo "     minikube service ${PROMETHEUS_RELEASE_NAME}-kube-p-prometheus -n ${NAMESPACE}"
 echo " "
-echo "   * Application Microservice:"
-echo "     minikube service ${HELM_RELEASE_NAME} -n ${NAMESPACE}"
+echo "   * Application Microservice (Nginx):"
+echo "     minikube service ${NGINX_RELEASE_NAME} -n default"
 
 echo " "
 echo "Grafana Default Credentials: admin / prom-operator"
-
-echo " "
 echo "---------------------------"

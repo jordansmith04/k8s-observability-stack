@@ -1,15 +1,17 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "k8s-observability-stack.fullname" . }}
+  name: {{ include "chart.fullname" . }}
   labels:
-    {{- include "k8s-observability-stack.labels" . | nindent 4 }}
+    {{- include "chart.labels" . | nindent 4 }}
 spec:
-  type: {{ .Values.microservice.service.type }}
+  # Define the type of service (e.g., ClusterIP, NodePort)
+  type: {{ .Values.service.type }}
   ports:
-    - port: {{ .Values.microservice.service.port }}
-      targetPort: {{ .Values.microservice.service.targetPort }}
+    - port: {{ .Values.service.port }}
+      # The internal port defined in the Deployment container spec
+      targetPort: {{ .Values.containerPort }}
       protocol: TCP
       name: http
   selector:
-    {{- include "k8s-observability-stack.selectorLabels" . | nindent 4 }}
+    {{- include "chart.selectorLabels" . | nindent 4 }}

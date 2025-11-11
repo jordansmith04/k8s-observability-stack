@@ -1,0 +1,67 @@
+replicaCount: 1
+
+image:
+  repository: grafana/grafana
+  tag: 10.4.0
+  pullPolicy: IfNotPresent
+
+containerPort: 3000
+
+# Security context for Grafana to access its data directory securely
+securityContext:
+  fsGroup: 472
+  supplementalGroups:
+    - 0
+
+# Environment variables for the container (Needed: Admin Credentials)
+containerEnv:
+  - name: GF_PATHS_PROVISIONING
+    value: /etc/grafana/provisioning
+  - name: GF_SECURITY_ADMIN_USER
+    value: admin
+  # IMPORTANT: Use a Kubernetes Secret to store this password in production.
+  - name: GF_SECURITY_ADMIN_PASSWORD
+    value: supersecurepassword123 
+
+# Readiness and Liveness Probes
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 5
+  timeoutSeconds: 1
+  path: /api/health
+  port: 3000
+
+# Liveness Probe
+livenessProbe:
+  enabled: true
+  initialDelaySeconds: 15
+  timeoutSeconds: 1
+  path: /api/health
+  port: 3000
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 1024Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+service:
+  type: LoadBalancer
+  port: 80
+
+volumes:
+  # Dashboard config map:
+  - name: dashboard-provisioning
+    configMap:
+      name: grafana-unified-dashboard
+      items:
+        - key: dashboards-provisioning.yaml
+          path: dashboards-provisioning.yaml
+
+volumeMounts:
+  # Dashboard volume mounts:
+  - name: dashboard-provisioning
+    mountPath: /etc/grafana/provisioning/dashboards/dashboards-provisioning.yaml
+    subPath: dashboards-provisioning.yaml

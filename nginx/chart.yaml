@@ -1,0 +1,6 @@
+apiVersion: v2
+name: nginx-microservice
+description: A Helm chart for deploying the Nginx microservice.
+version: 0.1.0
+appVersion: "1.25.3"
+type: application

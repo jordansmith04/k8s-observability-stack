@@ -1,33 +1,54 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "k8s-observability-stack.fullname" . }}
+  name: {{ include "chart.fullname" . }}
   labels:
-    {{- include "k8s-observability-stack.labels" . | nindent 4 }}
-    app.kubernetes.io/component: microservice
+    {{- include "chart.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.microservice.replicaCount }}
+  replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      {{- include "k8s-observability-stack.selectorLabels" . | nindent 6 }}
+      {{- include "chart.selectorLabels" . | nindent 6 }}
   template:
     metadata:
       labels:
-        {{- include "k8s-observability-stack.selectorLabels" . | nindent 8 }}
-        app.kubernetes.io/component: microservice
+        {{- include "chart.selectorLabels" . | nindent 8 }}
     spec:
       containers:
-        - name: {{ .Values.microservice.name }}
-          image: "{{ .Values.microservice.image.repository }}:{{ .Values.microservice.image.tag }}"
-          imagePullPolicy: {{ .Values.microservice.image.pullPolicy }}
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
-            - name: http
-              containerPort: {{ .Values.microservice.service.targetPort }}
+            # Primary port the application uses (3000 for Grafana, 9090 for Prometheus)
+            - name: http-port
+              containerPort: {{ .Values.containerPort }}
               protocol: TCP
-          resources:
-            {{- toYaml .Values.microservice.resources | nindent 12 }}
           
-          # Add standard Prometheus annotations for metrics exposure
-          annotations:
-            prometheus.io/scrape: 'true'
-            prometheus.io/port: '80'
+          # Runtime commands
+          {{- if .Values.args }}
+          args:
+            {{- toYaml .Values.args | nindent 12 }}
+          {{- end }}
+
+          # Mount a configuration file
+          {{- if .Values.configMapName }}
+          volumeMounts:
+            - name: config-volume
+              mountPath: {{ .Values.configMountPath | default "/config" }}
+            - name: storage-volume
+              mountPath: {{ .Values.storageMountPath | default "/data" }}
+          {{- end }}
+          
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+      
+      # Define volumes if the service needs configuration or persistent storage
+      {{- if .Values.configMapName }}
+      volumes:
+        - name: config-volume
+          configMap:
+            name: {{ .Values.configMapName }}
+        # Defaulting to emptyDir, but this should be a persistentVolumeClaim for production!
+        - name: storage-volume
+          emptyDir: {} 
+      {{- end }}

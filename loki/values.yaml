@@ -1,0 +1,76 @@
+replicaCount: 1
+
+image:
+  repository: grafana/loki
+  tag: "2.9.0"
+  pullPolicy: IfNotPresent
+
+# Kubernetes Service Configuration for Loki
+service:
+  type: ClusterIP
+  ports:
+    # HTTP/Metrics port (used by Prometheus and for readiness check)
+    http:
+      name: http-metrics
+      port: 3100
+      targetPort: 3100
+    # gRPC port (used by Logcli, Grafana, and other Loki components)
+    grpc:
+      name: grpc
+      port: 9095
+      targetPort: 9095
+
+# Loki Configuration (will be placed into a ConfigMap named 'loki-config')
+config:
+  lokiYaml: |
+    auth_enabled: false
+    server:
+      http_listen_port: 3100
+      grpc_listen_port: 9095
+    common:
+      path_prefix: /loki/data
+      replication_factor: 1
+      ring:
+        instance_addr: 127.0.0.1
+        kvstore:
+          store: inmemory
+      storage:
+        filesystem:
+          directory: /loki/data
+    schema_config:
+      configs:
+        - from: 2020-10-24
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+
+# Resource Management
+resources:
+  limits:
+    cpu: 200m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+persistence:
+  # Set to 'false' to use emptyDir. WARNING: When using emptyDir, all logs are lost if the pod restarts.
+  enabled: false 
+  
+  # To enable Persistent Volume Claim (PVC) for production:
+  # enabled: true
+  # accessMode: ReadWriteOnce
+  # size: 10Gi
+  # storageClass: "" # Leave empty for default or specify a StorageClass name
+  mountPath: /loki/data
+
+# Readiness Probe configuration
+readinessProbe:
+  enabled: true
+  initialDelaySeconds: 10
+  timeoutSeconds: 1
+  path: /ready
+  port: http-metrics
